@@ -1,0 +1,30 @@
+# secrets and credentials
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+.guild/credentials
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# node (front-end tooling, if used)
+node_modules/
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/
