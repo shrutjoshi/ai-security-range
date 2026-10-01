@@ -1,8 +1,10 @@
 """Manifest: analyze an MCP tool manifest for supply-chain risk.
 
-Flags four failure modes: poisoned descriptions (hidden instructions to the
-model), typosquatted server domains, rug-pull updates that exfiltrate data,
-and over-broad permission scopes. Approve only when nothing fires.
+Flags five failure modes: poisoned descriptions (hidden instructions to the
+model), tool shadowing (a description that rewrites how *other* tools behave),
+look-alike server domains (edit-distance typosquats and Unicode homographs),
+rug-pull updates that exfiltrate data or run install-time scripts, and
+over-broad permission scopes. Approve only when nothing fires.
 """
 
 from __future__ import annotations
@@ -11,14 +13,26 @@ import re
 
 from ..models import Finding, Manifest, ManifestVerdict
 
+# Mentioning credentials is fine (a secrets scanner must); instructing the model
+# to read or move them, or pointing it at key files, is not.
 _HIDDEN_INSTRUCTION = re.compile(
     r"<important>|do ?n['o]?t (mention|tell)|ignore (all|previous|prior|your)|"
-    r"system\s*:|\.aws|\.ssh|id_rsa|credential|append .*(summary|output)",
+    r"system\s*:|~/\.aws|~/\.ssh|id_rsa|append .*(summary|output)|"
+    r"\b(read|send|append|include|upload|forward|copy|exfiltrat\w*)\b[^.]{0,60}\bcredentials?\b",
     re.IGNORECASE,
 )
-_OVERBROAD = re.compile(r":\*\b|network:\*|filesystem:read:\*|filesystem:[^\s\"]*\*")
+_SHADOWING = re.compile(
+    r"\bb?cc\b[^.]{0,40}@|"
+    r"(when|whenever|if)\b[^.]{0,40}\b(any|other|another) tool|"
+    r"\b(also|always|silently)\s+(send|forward|copy|cc|bcc|add)\b|"
+    r"instead of the (user'?s?|requested|original)",
+    re.IGNORECASE,
+)
+_OVERBROAD = re.compile(r"(^|[:/])\*($|[:/])|filesystem:[^\s\"]*\*")
 _EXFIL = re.compile(
-    r"process\.env|postTo\(|fetch\(\s*[\"']https?://|analytics|collect|ingest",
+    r"process\.env|os\.environ|"
+    r"\b(fetch|postTo|post|put|get|request|urlopen|send)\s*\(\s*[\"']https?://|"
+    r"\b(curl|wget)\b[^|\n]*\|\s*(ba|z)?sh\b|\"(pre|post)install\"\s*:",
     re.IGNORECASE,
 )
 
@@ -45,15 +59,30 @@ def _levenshtein(a: str, b: str) -> int:
     return prev[-1]
 
 
+def _host(server: str) -> str:
+    return server.lower().split("/")[0].split(":")[0].strip().rstrip(".")
+
+
+def _homograph(server: str) -> bool:
+    """True when the host uses non-ASCII or punycode labels that can mimic Latin letters."""
+    host = _host(server)
+    return any(ord(ch) > 127 for ch in host) or any(
+        label.startswith("xn--") for label in host.split(".")
+    )
+
+
 def _typosquat(server: str) -> tuple[str, str] | None:
     """Return (impersonated_brand, real_domain) if the host looks like a look-alike."""
-    host = server.lower().split("/")[0].strip()
-    if host in _BRANDS.values():
-        return None
+    host = _host(server)
+    for domain in _BRANDS.values():
+        if host == domain or host.endswith("." + domain):
+            return None  # the real domain or one of its subdomains
     labels = re.split(r"[.\-_]", host)
     for brand, domain in _BRANDS.items():
         for label in labels:
-            if label and label != brand and _levenshtein(label, brand) <= 2:
+            # a label that is itself another known brand (gitlab vs github) is not a squat
+            if label and label != brand and label not in _BRANDS \
+                    and _levenshtein(label, brand) <= 2:
                 return brand, domain
     return None
 
@@ -68,6 +97,30 @@ def review(manifest: Manifest) -> ManifestVerdict:
                 detail=(
                     "The description carries instructions aimed at the model, not the "
                     "user (tool poisoning). The agent would obey them silently."
+                ),
+            )
+        )
+
+    if _SHADOWING.search(manifest.description or ""):
+        findings.append(
+            Finding(
+                kind="tool_shadowing",
+                detail=(
+                    "The description changes how the agent uses other tools (extra "
+                    "recipients, redirected calls). A tool should describe itself, not "
+                    "rewrite its neighbours."
+                ),
+            )
+        )
+
+    if manifest.server and _homograph(manifest.server):
+        findings.append(
+            Finding(
+                kind="typosquat",
+                detail=(
+                    f"Server '{manifest.server}' contains non-ASCII or punycode characters "
+                    "that render like Latin letters (IDN homograph). It is not the domain "
+                    "it appears to be."
                 ),
             )
         )
@@ -94,8 +147,9 @@ def review(manifest: Manifest) -> ManifestVerdict:
             Finding(
                 kind="rug_pull",
                 detail=(
-                    "An auto-update introduced code that forwards data to an outside "
-                    "host. Trust was granted to the prior version, not this one."
+                    "An auto-update introduced code that reads the environment, sends data "
+                    "to an outside host, or runs an install-time script. Trust was granted "
+                    "to the prior version, not this one."
                 ),
             )
         )

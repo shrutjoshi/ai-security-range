@@ -9,14 +9,14 @@ Built by Shrutika Joshi. Concepts map to the OWASP Top 10 for LLM Applications.
 
 ## The six characters
 
-| Character | Attack it teaches | OWASP LLM |
-|-----------|-------------------|-----------|
-| Sentinel | Direct prompt injection (three escalating defenses) | LLM01 Prompt Injection |
-| Manifest | MCP tool poisoning, typosquats, rug pulls, over-broad scopes | LLM03 Supply Chain |
-| Warden | Excessive permissions (least privilege) | LLM06 Excessive Agency |
-| Breaker | Insecure tool execution (command injection, SQLi, path traversal, SSRF) | LLM05 Improper Output Handling |
-| Echo | Indirect / second-order injection via ingested content | LLM01 Prompt Injection |
-| Ledger | Unauthorized tool use and agent abuse (trace audit) | LLM06 Excessive Agency |
+| Character | Attack it teaches | Hard tier | OWASP LLM |
+|-----------|-------------------|-----------|-----------|
+| Sentinel | Direct prompt injection (four escalating defenses) | Input classifier + normalizing output filter, beaten by novel encodings | LLM01 Prompt Injection |
+| Manifest | MCP tool poisoning, typosquats, rug pulls, over-broad scopes | IDN homographs, tool shadowing, postinstall backdoors, alarming-but-safe tools | LLM03 Supply Chain |
+| Warden | Excessive permissions (least privilege) | Scope *width*: one repo vs all, one folder vs whole drive | LLM06 Excessive Agency |
+| Breaker | Insecure tool execution (command injection, SQLi, path traversal, SSRF) | Newline injection, decimal-IP SSRF, absolute-path joins, SQLi behind a placeholder, safe calls that look dangerous | LLM05 Improper Output Handling |
+| Echo | Indirect / second-order injection via ingested content | Zero-click exfiltration through a rendered markdown image | LLM01 Prompt Injection |
+| Ledger | Unauthorized tool use and agent abuse (trace audit) | Exfiltration using only granted tools (egress allowlist) | LLM06 Excessive Agency |
 
 Sensitive data leakage (LLM02) is the objective condition of Sentinel, Echo, and
 Manifest's poisoned tool rather than a standalone character.

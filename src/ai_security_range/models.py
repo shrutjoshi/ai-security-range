@@ -78,6 +78,13 @@ class TraceStep(BaseModel):
 class AuditRequest(BaseModel):
     mandate: list[str]
     steps: list[TraceStep]
+    egress_allowlist: list[str] | None = Field(
+        default=None,
+        description=(
+            "Hosts the agent may send data to. When set, an in-mandate call that "
+            "reaches any other host is flagged as exfiltration."
+        ),
+    )
 
 
 class AuditResult(BaseModel):
