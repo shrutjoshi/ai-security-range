@@ -41,8 +41,8 @@ Total word budget for narration: ~200 words (≈2.2 words/sec).
 **[1:05–1:22] Why + how it's built**
 > "Why use it? Security training is usually slides people forget. This is muscle memory —
 > you learn the attack and the fix by doing both, with hints so you never get stuck.
-> It runs as real agents on Guild, and the code ships with a clean Snyk scan and no
-> dependencies."
+> It runs as real agents on Guild, and the code ships with tested detection engines,
+> SAST and a dependency audit in CI, and just three runtime dependencies."
 
 **[1:22–1:28] Close**
 > "Breach and Brief. Learn AI security by attacking it."

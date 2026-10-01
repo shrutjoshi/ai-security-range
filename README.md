@@ -60,7 +60,30 @@ curl -s localhost:8000/api/tool-exec/classify \
 
 Other endpoints: `/api/mcp/review`, `/api/permissions/check`, `/api/agent-audit`,
 `/api/prompt-injection/attempt`, `/api/indirect-injection/attempt`. Interactive
-docs at `/docs` when the service is running.
+docs at `/docs` when the service is running (set `AISR_DISABLE_DOCS=1` to turn
+them off; the Docker image does).
+
+`/api/tool-exec/classify` only trusts `"parameterized": true` when the request
+also sends the SQL template as `"query"`; the template is checked for
+placeholders and for argument values interpolated into it. A tool whose sink
+the engine can't identify fails closed (`"attack": "Unclassified tool"`).
+
+## Security model
+
+- **Service hardening.** Request bodies are capped at 64 KB while they stream in,
+  every field has a length limit, and the detection regexes use bounded gaps,
+  so no input can trigger super-linear matching. Responses carry `nosniff`,
+  `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and the page gets a
+  CSP that allows only its own inline script, by SHA-256 hash. The page loads
+  nothing from third parties.
+- **The engines are heuristics, not a sandbox.** They are offline and do not
+  resolve DNS, so a hostname that resolves to an internal address through
+  ordinary records still needs a resolve-and-pin check at fetch time. Brand
+  typosquat detection uses edit distance against a fixed brand list and can
+  flag legitimate look-alike names.
+- **The front-end is client-side by design.** It is a single offline file, so
+  the passphrases, answers, and progress live in the browser and can be read in
+  the page source. Clearance is a learning aid, not a credential.
 
 ## Quality gate
 
@@ -71,7 +94,7 @@ pytest -q                              # unit + API tests
 ruff check .                           # lint
 mypy                                   # strict type check
 bandit -r src -c pyproject.toml        # SAST
-pip-audit                              # dependency vulnerabilities
+pip-audit .                            # vulnerabilities in the project's dependencies
 ```
 
 Note on scanning: the runtime dependency surface is deliberately small (FastAPI,

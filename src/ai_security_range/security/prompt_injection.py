@@ -14,21 +14,27 @@ import re
 
 from ..models import InjectionResult
 
+# Gaps between keywords are bounded ({0,80}) rather than ".*": with re.search, an
+# unbounded gap rescans to the end of input from every keyword hit, which is
+# quadratic and was a measured denial-of-service on the API.
 _PATTERNS: dict[str, re.Pattern[str]] = {
     "ignore_instructions": re.compile(
-        r"(ignore|disregard|forget|override).*(instruction|rule|prompt|previous|prior|above|told)",
+        r"(ignore|disregard|forget|override)[^\n]{0,80}?"
+        r"(instruction|rule|prompt|previous|prior|above|told)",
         re.IGNORECASE,
     ),
     "system_prompt_leak": re.compile(
         r"(your|the) (instruction|rule|system prompt|prompt|guideline)|"
-        r"what were you told|repeat.*(above|instruction)",
+        r"what were you told|repeat[^\n]{0,80}?(above|instruction)",
         re.IGNORECASE,
     ),
     "spell": re.compile(
         r"spell|letter by letter|each letter|one letter|character by character", re.IGNORECASE
     ),
     "spaced": re.compile(
-        r"hyphen|\bdash(es|ed)?\b|between each|separate.*letter|space.*letter", re.IGNORECASE
+        r"hyphen|\bdash(es|ed)?\b|between each|"
+        r"separate[^\n]{0,40}?letter|space[^\n]{0,40}?letter",
+        re.IGNORECASE,
     ),
     "poem": re.compile(r"poem|acrostic|song|haiku|verse|rhyme|riddle|story", re.IGNORECASE),
     "translate": re.compile(

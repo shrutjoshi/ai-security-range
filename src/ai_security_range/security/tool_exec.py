@@ -6,7 +6,13 @@ server-side, unit-tested implementation of the Breaker challenge logic.
 
 Hosts are normalized the way resolvers and HTTP clients do before being judged,
 so obfuscated forms (decimal ``2852039166``, short ``127.1``, hex/octal octets,
-IPv4-mapped IPv6, scheme-less URLs) cannot slip past the check.
+IPv4-mapped IPv6, scheme-less URLs, WHATWG backslash parsing, wildcard-DNS names
+such as ``169.254.169.254.nip.io``) cannot slip past the check.
+
+The engine fails closed: a tool whose sink it cannot identify, receiving
+untrusted input, is not declared safe. It is offline by design and does not
+resolve DNS, so names that resolve to internal addresses through ordinary
+records still need a resolve-and-pin check at fetch time.
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ _SQL_PAYLOAD = re.compile(
     r"\bOR\b\s+\d+\s*=\s*\d+|;\s*DROP\b|\bUNION\b\s+\bSELECT\b|--",
     re.IGNORECASE,
 )
+_SQL_PLACEHOLDER = re.compile(r"\?|%s|%\(\w+\)s|:\w+|\$\d+")
 _PATH_TRAVERSAL = re.compile(r"(^|[\\/])\.\.([\\/]|$)")
 _ABSOLUTE_PATH = re.compile(r"^([\\/]|~|[A-Za-z]:[\\/])")
 
@@ -30,13 +37,21 @@ _ABSOLUTE_PATH = re.compile(r"^([\\/]|~|[A-Za-z]:[\\/])")
 _INTERNAL_NAMES = ("localhost", "metadata.google.internal", "metadata", "instance-data")
 _INTERNAL_SUFFIXES = (".localhost", ".internal", ".local")
 
-# Tool-name tokens that identify which injection sink a tool reaches.
+# An IPv4 address embedded in a hostname (dotted or dashed), as used by wildcard
+# DNS services: 169.254.169.254.nip.io, 10-0-0-1.sslip.io, app.127.0.0.1.xip.io.
+_EMBEDDED_IPV4 = re.compile(r"(?:^|[.-])((?:\d{1,3}[.-]){3}\d{1,3})(?:[.-]|$)")
+
+# Tool-name tokens that identify which injection sink a tool reaches. Order
+# matters: "db.execute" is a database call, not a shell.
 _FAMILIES: tuple[tuple[str, frozenset[str]], ...] = (
     ("http", frozenset({"http", "https", "fetch", "url", "request", "requests", "webhook",
                         "curl", "browse"})),
     ("db", frozenset({"db", "sql", "query", "database", "postgres", "mysql", "sqlite"})),
-    ("shell", frozenset({"shell", "exec", "run", "command", "cmd", "bash", "sh",
-                         "subprocess", "system"})),
+    ("code", frozenset({"eval", "python", "py", "js", "javascript", "node", "script",
+                        "code", "repl", "interpreter", "notebook"})),
+    ("shell", frozenset({"shell", "exec", "execute", "run", "command", "cmd", "bash", "sh",
+                         "zsh", "subprocess", "system", "powershell", "pwsh", "terminal",
+                         "spawn", "popen"})),
     ("fs", frozenset({"fs", "file", "files", "path", "read", "open", "readfile", "readlink",
                       "write", "writefile"})),
 )
@@ -86,10 +101,37 @@ def _dangerous_host(host: str) -> bool:
 
 
 def _url_host(value: str) -> str:
-    v = value.strip()
+    # WHATWG URL parsing (browsers, most HTTP clients) strips tab/newline and treats
+    # "\\" as "/". Python's urlparse does neither, so "http://169.254.169.254\\@ex.com"
+    # reads as host ex.com here but reaches the metadata IP in a client. Normalize first.
+    v = re.sub(r"[\t\r\n]", "", value.strip()).replace("\\", "/")
     if "://" not in v:
-        v = "http://" + v  # scheme-less input still reaches a host once a client adds one
-    return urlparse(v).hostname or ""
+        v = "http://" + v.lstrip("/")  # scheme-less input still reaches a host
+    try:
+        return urlparse(v).hostname or ""
+    except ValueError:
+        return ""
+
+
+def _embedded_internal_ip(host: str) -> bool:
+    for match in _EMBEDDED_IPV4.finditer(host):
+        candidate = re.sub(r"-", ".", match.group(1))
+        try:
+            if _dangerous_host(str(ipaddress.IPv4Address(candidate))):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _fully_decoded(value: str, rounds: int = 5) -> str:
+    """URL-decode until stable, so multiply-encoded "../" cannot hide."""
+    for _ in range(rounds):
+        decoded = unquote(value)
+        if decoded == value:
+            break
+        value = decoded
+    return value
 
 
 def _family(tool: str) -> str:
@@ -105,8 +147,30 @@ def classify(call: ToolCall) -> Verdict:
     values = list(call.args.values())
     family = _family(call.tool)
 
+    if family == "code":
+        if values:
+            return Verdict(
+                safe=False,
+                attack="Code injection",
+                reason=(
+                    "Untrusted input reaches an interpreter that evaluates it as code. "
+                    "There is no safe escaping for eval; expose a narrow tool instead."
+                ),
+            )
+        return Verdict(safe=True, reason="No untrusted input reaches the interpreter.")
+
     if family == "shell":
         for v in values:
+            if v.lstrip().startswith("-"):
+                return Verdict(
+                    safe=False,
+                    attack="Argument injection",
+                    reason=(
+                        "Input starting with '-' is parsed as an option by the command "
+                        "(e.g. ssh -oProxyCommand, curl -o, tar --checkpoint-action). "
+                        "Validate the value and pass '--' before positional arguments."
+                    ),
+                )
             if _SHELL_METACHARS.search(v):
                 return Verdict(
                     safe=False,
@@ -120,11 +184,24 @@ def classify(call: ToolCall) -> Verdict:
         return Verdict(safe=True, reason="No untrusted input reaches a shell metacharacter.")
 
     if family == "db":
-        if call.parameterized:
-            return Verdict(
-                safe=True,
-                reason="Values are bound as parameters, not concatenated. The safe pattern.",
-            )
+        if call.parameterized and call.query is not None:
+            inlined = [v for v in values if v and v in call.query]
+            if inlined:
+                return Verdict(
+                    safe=False,
+                    attack="SQL injection",
+                    reason=(
+                        "The query uses placeholders, but an argument value appears in the "
+                        "SQL text itself, so it was interpolated, not bound. Placeholders "
+                        "cannot bind identifiers such as ORDER BY columns; allowlist them."
+                    ),
+                )
+            if _SQL_PLACEHOLDER.search(call.query):
+                return Verdict(
+                    safe=True,
+                    reason="Values are bound as parameters, not concatenated. The safe pattern.",
+                )
+        # parameterized=True without a verifiable query is only a claim: check values.
         for v in values:
             if _SQL_PAYLOAD.search(v):
                 return Verdict(
@@ -148,7 +225,7 @@ def classify(call: ToolCall) -> Verdict:
 
     if family == "fs":
         for raw in values:
-            v = unquote(unquote(raw))  # undo single and double URL encoding of "../"
+            v = _fully_decoded(raw)
             if _PATH_TRAVERSAL.search(v):
                 return Verdict(
                     safe=False,
@@ -173,7 +250,7 @@ def classify(call: ToolCall) -> Verdict:
     if family == "http":
         for v in values:
             host = _url_host(v)
-            if _dangerous_host(host):
+            if _dangerous_host(host) or _embedded_internal_ip(host):
                 return Verdict(
                     safe=False,
                     attack="SSRF",
@@ -185,4 +262,13 @@ def classify(call: ToolCall) -> Verdict:
                 )
         return Verdict(safe=True, reason="No internal or link-local target in the URL.")
 
-    return Verdict(safe=True, reason="No known injection sink for this tool and arguments.")
+    if values:
+        return Verdict(
+            safe=False,
+            attack="Unclassified tool",
+            reason=(
+                f"No sink policy exists for '{call.tool}', so untrusted input cannot be "
+                "shown safe. Register the tool's sink type or require human approval."
+            ),
+        )
+    return Verdict(safe=True, reason="No untrusted input reaches this tool.")

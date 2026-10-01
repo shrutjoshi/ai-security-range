@@ -28,3 +28,6 @@ node_modules/
 .DS_Store
 .idea/
 .vscode/
+
+# private security testing (red-team probes, audit notes) - never published
+security-audit/

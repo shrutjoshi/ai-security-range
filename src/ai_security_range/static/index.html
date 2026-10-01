@@ -4,9 +4,6 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Breach &amp; Brief — AI Security Training Range</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
 <style>
   :root{
     --bg:#0F1117; --surface:#171A23; --surface2:#1E222E; --line:#2A2F3D;
@@ -16,9 +13,9 @@
     --red:#F2545B; --red-soft:#3a1c20;
     --green:#58C39A; --green-soft:#183028;
     --blue:#6FA8DC; --blue-soft:#16283a;
-    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
-    --sans:'Inter',system-ui,-apple-system,sans-serif;
-    --disp:'Space Grotesk','Inter',sans-serif;
+    --mono:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace;
+    --sans:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
+    --disp:system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
     box-sizing:border-box;
     padding-top:env(safe-area-inset-top,0px);
     padding-bottom:env(safe-area-inset-bottom,0px);
@@ -228,7 +225,7 @@
 
 <header class="bar">
   <div class="bar-inner">
-    <div class="brand" onclick="go('home')"><span class="dot"></span>Breach &amp; Brief</div>
+    <div class="brand" id="brand-home" role="link" tabindex="0"><span class="dot"></span>Breach &amp; Brief</div>
     <div class="bar-spacer"></div>
     <div class="clearance" title="Clearance rises as you beat characters">
       <span><span class="lvl-word">clearance:</span> <span class="lvl" id="rank">Recruit</span></span>
@@ -335,7 +332,7 @@ function nextCharButton(afterId){
 function buildScaffold(c){
   const play=document.getElementById('play');
   play.innerHTML='';
-  play.appendChild(el('<button class="back" onclick="go(\'home\')">← All characters</button>'));
+  const back=el('<button class="back">← All characters</button>'); back.onclick=()=>go('home'); play.appendChild(back);
   const lesson=el('<div class="lesson"></div>');
   lesson.appendChild(el(`<p class="eyebrow"><span>${c.role==='red'?'RED TEAM':'BLUE TEAM'}</span> · <span>${c.topic}</span></p>`));
   lesson.appendChild(el(`<h2>${c.name}</h2>`));
@@ -410,10 +407,10 @@ CHAR.sentinel = {
     let cur=0, maxUnlocked=0; const history=secrets.map(()=>[]);
 
     const RX={askSecret:/(pass\s?phrase|password|secret|the code|the word)/i, askVerb:/(what|tell|give|reveal|share|say|show|need|know|is the)/i,
-      ignore:/(ignore|disregard|forget|override).*(instruction|rule|prompt|previous|prior|above|told)/i,
-      sysprompt:/(your|the) (instruction|rule|system prompt|prompt|guideline)|what were you told|repeat.*(above|instruction)/i,
+      ignore:/(ignore|disregard|forget|override)[^\n]{0,80}?(instruction|rule|prompt|previous|prior|above|told)/i,
+      sysprompt:/(your|the) (instruction|rule|system prompt|prompt|guideline)|what were you told|repeat[^\n]{0,80}?(above|instruction)/i,
       spell:/(spell|letter by letter|one letter|each letter|first letter|character by character)/i,
-      spaced:/(spaced|hyphen|\bdash(es|ed)?\b|between each|separate.*letter)/i,
+      spaced:/(spaced|hyphen|\bdash(es|ed)?\b|between each|separate[^\n]{0,40}?letter)/i,
       poem:/(poem|acrostic|song|haiku|verse|rhyme|story|riddle)/i,
       translate:/(translate|in (french|spanish|german|italian|latin|pig ?latin|morse|binary|emoji))/i,
       encode:/(base ?64|reverse|backwards|rot13|hex|encode|cipher|leetspeak)/i,
@@ -1137,6 +1134,10 @@ CHAR.ledger = {
 };
 
 /* boot */
+// No inline on* attributes: the server's CSP allows only this script, by hash.
+const brandHome=document.getElementById('brand-home');
+brandHome.addEventListener('click',()=>go('home'));
+brandHome.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); go('home'); } });
 refreshRoster();
 </script>
 </body>

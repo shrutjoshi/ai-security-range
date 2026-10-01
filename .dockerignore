@@ -10,3 +10,12 @@ dist
 .venv
 tests
 .github
+# secrets must never enter the build context
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+.guild
+.DS_Store
+security-audit

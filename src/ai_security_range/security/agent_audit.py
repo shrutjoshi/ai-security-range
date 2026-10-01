@@ -17,13 +17,34 @@ import re
 from ..models import AuditRequest, AuditResult
 
 _DESTRUCTIVE = ("delete", "drop", "close", "remove", "wipe", "destroy", "purge")
-_URL_HOST = re.compile(r"https?://([^/\s\"'?#)]+)", re.IGNORECASE)
+# Any scheme (http, ftp, ws, ...) or protocol-relative "//host".
+_URL_HOST = re.compile(r"(?:\b[a-z][a-z0-9+.-]*:)?//([^/\s\"'?#)]+)", re.IGNORECASE)
 _EMAIL_HOST = re.compile(r"[\w.+-]+@([\w-]+(?:\.[\w-]+)+)")
+# A scheme-less host at the start of a quoted argument: "cdn-px.net/p?d=...",
+# "203.0.113.9:8080/x", or a bare "evil.com".
+_BARE_HOST = re.compile(
+    r"[\"']\s*([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?=[:/?#]|[\"'])", re.IGNORECASE
+)
+# A quoted "report.pdf" is a file, not a host. (Some of these are also real TLDs;
+# a file name is the far likelier reading inside a tool argument.)
+_FILE_EXTENSIONS = frozenset({
+    "pdf", "txt", "csv", "json", "md", "png", "jpg", "jpeg", "gif", "svg", "doc", "docx",
+    "xls", "xlsx", "ppt", "pptx", "zip", "gz", "tar", "py", "js", "ts", "html", "xml",
+    "yaml", "yml", "log", "sql", "sh", "toml", "ini", "cfg",
+})
+
+
+def _is_ip(value: str) -> bool:
+    return bool(re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", value))
 
 
 def _hosts(text: str) -> list[str]:
     hosts = [h.split("@")[-1].split(":")[0].lower() for h in _URL_HOST.findall(text)]
     hosts += [h.lower() for h in _EMAIL_HOST.findall(text)]
+    for candidate in _BARE_HOST.findall(text):
+        host = candidate.lower()
+        if _is_ip(host) or host.rsplit(".", 1)[-1] not in _FILE_EXTENSIONS:
+            hosts.append(host)
     return hosts
 
 
@@ -41,14 +62,24 @@ def is_destructive(tool: str) -> bool:
     return any(verb in tool.lower() for verb in _DESTRUCTIVE)
 
 
+def _in_mandate(name: str, mandate: list[str]) -> bool:
+    """Exact grants only. A namespace grant must be explicit: "crm.*" covers "crm.read",
+    but "read_ticket" does not cover "read_ticket.bulk_delete"."""
+    for entry in mandate:
+        if name == entry:
+            return True
+        if entry.endswith(".*") and name.startswith(entry[:-1]):
+            return True
+    return False
+
+
 def audit(req: AuditRequest) -> AuditResult:
     allowed = set(req.mandate)
     for i, step in enumerate(req.steps):
         if step.kind != "call":
             continue
         name = _tool_name(step.text, step.tool)
-        base = name.split(".")[0] if "." in name else name
-        if name not in allowed and base not in allowed:
+        if not _in_mandate(name, req.mandate):
             note = (
                 " It is also a destructive, irreversible action that should require "
                 "human approval." if is_destructive(name) else ""

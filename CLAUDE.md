@@ -29,7 +29,7 @@ Applications.
 - Lint: `ruff check .`
 - Types: `mypy` (strict)
 - SAST: `bandit -r src -c pyproject.toml`
-- Dependency audit: `pip-audit`
+- Dependency audit: `pip-audit .` (the project's dependencies, not the whole environment)
 
 Run all of these before committing. CI runs the same gate.
 
